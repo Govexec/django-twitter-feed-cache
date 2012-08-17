@@ -5,7 +5,7 @@ Twitter Feed Cache by GovExec
 Dependencies
 ------------
 
-- streamtweet
+- tweetstream
 
 
 Installation

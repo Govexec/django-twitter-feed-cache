@@ -10,10 +10,10 @@ setup(
     author_email='GEWebDevTeam@govexec.com',
     packages=['twitter_feed_cache'],
     url='https://github.com/Govexec/django-twitter-feed-cache',
-    description="Get public tweets from Twitter's Streaming API using streamtweet",
+    description="Get public tweets from Twitter's Streaming API using tweetstream",
     long_description=open('README.rst').read(),
     install_requires=[
      "Django >= 1.3",
-     "streamtweet",
+     "tweetstream",
     ]
 )
