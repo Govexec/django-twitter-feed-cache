@@ -6,6 +6,7 @@ Dependencies
 ------------
 
 - tweetstream
+- requests
 
 
 Installation
