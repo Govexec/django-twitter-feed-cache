@@ -189,6 +189,8 @@ class Command(BaseCommand):
             self.daemon_context.stdout = open(TWITTER_CACHE_LOG_FILE, 'a+')
             self.daemon_context.stderr = open(TWITTER_CACHE_LOG_FILE, 'a+', buffering=0)
 
+        self.stdout.write("Starting daemon...\n")
+
         try:
             # become a daemon
             self.daemon_context.open()
