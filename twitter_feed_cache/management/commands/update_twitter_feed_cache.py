@@ -8,6 +8,7 @@ from optparse import make_option
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from daemon.runner import make_pidlockfile, is_pidfile_stale, emit_message
+from content_utils.utils import expire_cache_by_path
 
 TWITTER_USERNAME = getattr(settings, 'TWITTER_USERNAME', None)
 TWITTER_PASSWORD = getattr(settings, 'TWITTER_PASSWORD', None)
@@ -80,6 +81,8 @@ class Command(BaseCommand):
                         try:
                             tweet = Tweet.objects.get(external_tweet_id=streamtweet["delete"]["status"]["id"])
                             tweet.delete()
+
+                            expire_cache_by_path('/data/twitter_feed_cache/tweets/', is_view=False)
                         except:
                             print "Failed to delete"
                     else:
@@ -146,6 +149,8 @@ class Command(BaseCommand):
                     tweet.in_reply_to_status_id = streamtweet["in_reply_to_status_id"]
 
                     tweet.save()
+
+                    expire_cache_by_path('/data/twitter_feed_cache/tweets/', is_view=False)
 
                 else:
                     self.emit_formatted_message("Bypassing tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" %
