@@ -1,15 +1,59 @@
+import os
+import sys
+import daemon
+import signal
+import lockfile
+import datetime
+from optparse import make_option
+from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+from daemon.runner import make_pidlockfile, is_pidfile_stale, emit_message
+
+TWITTER_USERNAME = getattr(settings, 'TWITTER_USERNAME', None)
+TWITTER_PASSWORD = getattr(settings, 'TWITTER_PASSWORD', None)
+TWITTER_CACHE_WORKING_DIR = getattr(settings, 'TWITTER_CACHE_WORKING_DIR', '/tmp')
+TWITTER_CACHE_PID_FILE = os.path.realpath(getattr(settings, 'TWITTER_CACHE_PID_FILE', '/var/run/twitter_cache.pid'))
+TWITTER_CACHE_LOG_FILE = os.path.realpath(getattr(settings, 'TWITTER_CACHE_LOG_FILE', None))
 
 class Command(BaseCommand):
+    pidfile_timeout = 10
+    start_message = u"Started with pid %(pid)d"
     help = "Update local twitter feed cache based via Twitter API"
+    option_list = BaseCommand.option_list + (
+        make_option('--start',
+            action='store_true',
+            dest='start',
+            default=False,
+            help='Start twitter feed cache as a daemon'),
+        make_option('--stop',
+            action='store_true',
+            dest='stop',
+            default=False,
+            help='Stop twitter feed cache daemon'),
+    )
 
     def handle(self, *args, **options):
-        from settings import TWITTER_USERNAME, TWITTER_PASSWORD
+        error_messages = []
+
+        if TWITTER_PASSWORD is None:
+            error_messages.append('settings.TWITTER_PASSWORD must be set.')
+
+        if TWITTER_USERNAME is None:
+            error_messages.append('settings.TWITTER_USERNAME must be set.')
+
+        if len(error_messages) > 0:
+            raise CommandError("\n".join(error_messages))
+
+        if options['start']:
+            self.start_daemon()
+        elif options['stop']:
+            self.stop_daemon()
+        else:
+            self.cache_tweets()
+
+    def cache_tweets(self):
         import tweetstream
-
         from twitter_feed_cache.models import Tweet, FollowAccount
-        import datetime
-
 
         users = []
         accounts = FollowAccount.objects.filter(active=True)
@@ -31,7 +75,7 @@ class Command(BaseCommand):
             for streamtweet in stream:
                 if "delete" in streamtweet:
                     if streamtweet["delete"]["status"]["user_id"] in users:
-                        print "Deleting tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["delete"]["status"]["user_id"], stream.count, stream.rate)
+                        self.emit_formatted_message("Deleting tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["delete"]["status"]["user_id"], stream.count, stream.rate))
 
                         try:
                             tweet = Tweet.objects.get(external_tweet_id=streamtweet["delete"]["status"]["id"])
@@ -39,9 +83,9 @@ class Command(BaseCommand):
                         except:
                             print "Failed to delete"
                     else:
-                        print "Bypassing delete tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["delete"]["status"]["user_id"], stream.count, stream.rate)
+                        self.emit_formatted_message("Bypassing delete tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["delete"]["status"]["user_id"], stream.count, stream.rate))
                 elif streamtweet["user"]["id"] in users:
-                    print "Saving tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["user"]["screen_name"], stream.count, stream.rate)
+                    self.emit_formatted_message("Saving tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["user"]["screen_name"], stream.count, stream.rate))
                     #print "Text: %s" % str(tweet["text"])
 
                     # Parse data
@@ -104,6 +148,88 @@ class Command(BaseCommand):
                     tweet.save()
 
                 else:
-                    print "Bypassing tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["user"]["screen_name"], stream.count, stream.rate)
+                    self.emit_formatted_message("Bypassing tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" %
+                                                (streamtweet["user"]["screen_name"], stream.count, stream.rate))
 
         self.stdout.write("Stream stopped\n\n")
+
+    """  Make a PIDLockFile instance """
+    def init_pidfile(self):
+        self.pidfile = make_pidlockfile(TWITTER_CACHE_PID_FILE, self.pidfile_timeout)
+
+    """ Prepend date to a message then output the message to a stream and flush the stream """
+    def emit_formatted_message(self, message, stream=sys.stdout):
+        if message:
+            formatted_message = "%s\t%s" % (datetime.datetime.now(), message.strip(),)
+            emit_message(message=formatted_message, stream=stream)
+
+    """ Open the daemon context and run the application. """
+    def start_daemon(self):
+        # root user check
+        if os.geteuid() == 0:
+            raise CommandError("Can not run daemon as root!\n")
+        # PID file setuo
+        self.init_pidfile()
+        # remove pid file if PID is not active
+        if is_pidfile_stale(self.pidfile):
+            self.pidfile.break_lock()
+        # check for existence if PID file, means another instance is already running
+        if self.pidfile.is_locked():
+            pidfile_path = self.pidfile.path
+            raise CommandError(u"PID file %(pidfile_path)r is locked.  Daemon is probably already running." % vars())
+        # configure daemon context
+        self.daemon_context = daemon.DaemonContext(
+            working_directory=TWITTER_CACHE_WORKING_DIR,
+            umask=0o002,
+            detach_process=True,
+            pidfile=self.pidfile
+        )
+
+        if TWITTER_CACHE_LOG_FILE is not None:
+            self.daemon_context.stdout = open(TWITTER_CACHE_LOG_FILE, 'a+')
+            self.daemon_context.stderr = open(TWITTER_CACHE_LOG_FILE, 'a+', buffering=0)
+
+        try:
+            # become a daemon
+            self.daemon_context.open()
+        except lockfile.AlreadyLocked:
+            pidfile_path = self.pidfile.path
+            raise CommandError(
+                u"PID file %(pidfile_path)r already locked" % vars())
+        except lockfile.LockTimeout:
+            pidfile_path = self.pidfile.path
+            raise CommandError(
+                u"PID file %(pidfile_path)r lockfile.LockTimeout" % vars())
+
+        pid = os.getpid()
+        message = self.start_message % vars()
+        self.emit_formatted_message(message)
+
+        # run app
+        self.cache_tweets()
+
+    """ Terminate the daemon process specified in the current PID file. """
+    def stop_daemon(self):
+        # PID file setup
+        self.init_pidfile()
+        # does a PID file exists
+        if not self.pidfile.is_locked():
+            pidfile_path = self.pidfile.path
+            raise CommandError(u"PID file %(pidfile_path)r not locked" % vars())
+        # is the PID in the pid file active
+        if is_pidfile_stale(self.pidfile):
+            self.pidfile.break_lock()
+            self.stdout.write("Daemon is not running.\n")
+        else:
+            # get the PID from PID file
+            pid = self.pidfile.read_pid()
+            try:
+                # terminate the daemon process
+                os.kill(pid, signal.SIGTERM)
+            except OSError as exc:
+                raise CommandError(u"Failed to terminate %(pid)d: %(exc)s" % vars())
+
+            logfile = open(TWITTER_CACHE_LOG_FILE, 'a+', buffering=0)
+            logfile.write("%s\tDaemon stopped\n" % datetime.datetime.now())
+            logfile.close()
+            self.stdout.write("Daemon stopped.\n")

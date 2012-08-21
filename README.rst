@@ -35,3 +35,11 @@ Collect Tweets
 To collect tweets from the stream, run::
 
 $ python ./manage.py update_twitter_feed_cache
+
+To collect tweets from the stream as a daemon, run::
+
+$ python ./manage.py update_twitter_feed_cache --start
+
+To stop daemon, run::
+
+$ python ./manage.py update_twitter_feed_cache --stop
