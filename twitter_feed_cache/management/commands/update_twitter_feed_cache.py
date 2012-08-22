@@ -123,12 +123,13 @@ class Command(BaseCommand):
                             # reset already_processed
                             already_processed = []
                             for url in streamtweet["entities"]["urls"]:
-                                if not url["display_url"] in already_processed:
-                                    already_processed.append(url["display_url"])
+                                if hasattr(url, "display_url"):
+                                    if not url["display_url"] in already_processed:
+                                        already_processed.append(url["display_url"])
 
-                                    # replace #hash_tag with link
-                                    link = "<a href=\"%s\" rel=\"external\" title=\"%s\">%s</a>" % (url["url"], url["expanded_url"], url["display_url"])
-                                    text = text.replace(url["url"], link)
+                                        # replace #hash_tag with link
+                                        link = "<a href=\"%s\" rel=\"external\" title=\"%s\">%s</a>" % (url["url"], url["expanded_url"], url["display_url"])
+                                        text = text.replace(url["url"], link)
 
                     # Save tweet to DB
                     tweet = Tweet()
