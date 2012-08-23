@@ -80,18 +80,19 @@ class Command(BaseCommand):
             for streamtweet in stream:
                 try:
                     if "delete" in streamtweet:
-                        if streamtweet["delete"]["status"]["user_id"] in users:
-                            self.emit_formatted_message(u"Deleting tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["delete"]["status"]["user_id"], stream.count, stream.rate))
-
-                            try:
-                                tweet = Tweet.objects.get(external_tweet_id=streamtweet["delete"]["status"]["id"])
-                                tweet.delete()
-
-                                expire_cache_by_path('/data/twitter_feed_cache/tweets/', is_view=False)
-                            except:
-                                print "Failed to delete"
-                        else:
-                            self.emit_formatted_message("Bypassing delete tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["delete"]["status"]["user_id"], stream.count, stream.rate))
+                        if "status" in streamtweet["delete"]:
+                            if "user_id" in streamtweet["delete"]["status"]:
+                                if streamtweet["delete"]["status"]["user_id"] in users:
+                                    self.emit_formatted_message(u"Deleting tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["delete"]["status"]["user_id"], stream.count, stream.rate))
+                                    try:
+                                        tweet = Tweet.objects.get(external_tweet_id=int(streamtweet["delete"]["status"]["id"]))
+                                        tweet.delete()
+                                        expire_cache_by_path('/data/twitter_feed_cache/tweets/', is_view=False)
+                                    except Exception, err:
+                                        self.emit_formatted_message(u"Failed to delete tweet: %s\n%s"
+                                            % (sys.exc_info()[0], str(err),))
+                                else:
+                                    self.emit_formatted_message("Bypassing delete tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["delete"]["status"]["user_id"], stream.count, stream.rate))
                     elif streamtweet["user"]["id"] in users:
                         user_screen_name = force_unicode(streamtweet["user"]["screen_name"])
                         user_name = force_unicode(streamtweet["user"]["name"])
@@ -103,41 +104,44 @@ class Command(BaseCommand):
                         # Add links to tweet
                         text = unicode(streamtweet["text"])
                         if "entities" in streamtweet:
-                            if "user_mentions" in streamtweet["entities"]:
-                                # reset already_processed
-                                already_processed = []
-                                for mention in streamtweet["entities"]["user_mentions"]:
-                                    mention["screen_name"] = force_unicode(mention["screen_name"])
-                                    if not mention["screen_name"] in already_processed:
-                                        already_processed.append(mention["screen_name"])
-                                        # replace @screen_name with link
-                                        link = u"<a href=\"http://www.twitter.com/%s\" rel=\"external\">@%s</a>" % (mention["screen_name"], mention["screen_name"])
-                                        text = text.replace(u"@%s" % mention["screen_name"], link)
+                            if streamtweet["entities"]:
+                                if "user_mentions" in streamtweet["entities"]:
+                                    # reset already_processed
+                                    already_processed = []
+                                    for mention in streamtweet["entities"]["user_mentions"]:
+                                        mention["screen_name"] = force_unicode(mention["screen_name"])
+                                        if not mention["screen_name"] in already_processed:
+                                            already_processed.append(mention["screen_name"])
+                                            # replace @screen_name with link
+                                            link = u"<a href=\"http://www.twitter.com/%s\" rel=\"external\">@%s</a>" % (mention["screen_name"], mention["screen_name"])
+                                            text = text.replace(u"@%s" % mention["screen_name"], link)
 
-                            if "hashtags" in streamtweet["entities"]:
-                                # reset already_processed
-                                already_processed = []
-                                for hashtag in streamtweet["entities"]["hashtags"]:
-                                    hashtag["text"] = force_unicode(hashtag["text"])
-                                    if not hashtag["text"] in already_processed:
-                                        already_processed.append(hashtag["text"])
-                                        # replace #hash_tag with link
-                                        link = u"<a href=\"https://twitter.com/search/?src=hash&q=%%23%s\" rel=\"external\">#%s</a>" % (hashtag["text"], hashtag["text"])
-                                        text = text.replace(u"#%s" % hashtag["text"], link)
+                                if "hashtags" in streamtweet["entities"]:
+                                    if streamtweet["entities"]["hashtags"]:
+                                        # reset already_processed
+                                        already_processed = []
+                                        for hashtag in streamtweet["entities"]["hashtags"]:
+                                            hashtag["text"] = force_unicode(hashtag["text"])
+                                            if not hashtag["text"] in already_processed:
+                                                already_processed.append(hashtag["text"])
+                                                # replace #hash_tag with link
+                                                link = u"<a href=\"https://twitter.com/search/?src=hash&q=%%23%s\" rel=\"external\">#%s</a>" % (hashtag["text"], hashtag["text"])
+                                                text = text.replace(u"#%s" % hashtag["text"], link)
 
-                            if "urls" in streamtweet["entities"]:
-                                # reset already_processed
-                                already_processed = []
-                                for url in streamtweet["entities"]["urls"]:
-                                    if hasattr(url, "display_url"):
-                                        url["display_url"] = force_unicode(url["display_url"])
-                                        url["url"] = force_unicode(url["url"])
-                                        url["expanded_url"] = force_unicode(url["expanded_url"])
-                                        if not url["display_url"] in already_processed:
-                                            already_processed.append(url["display_url"])
-                                            # replace #hash_tag with link
-                                            link = u"<a href=\"%s\" rel=\"external\" title=\"%s\">%s</a>" % (url["url"], url["expanded_url"], url["display_url"])
-                                            text = text.replace(url["url"], link)
+                                if "urls" in streamtweet["entities"]:
+                                    # reset already_processed
+                                    already_processed = []
+                                    for url in streamtweet["entities"]["urls"]:
+                                        if "display_url" in url and "url" in url and "expanded_url" in url:
+                                            if url["display_url"] and url["url"] and url["expanded_url"]:
+                                                url["display_url"] = force_unicode(url["display_url"])
+                                                url["url"] = force_unicode(url["url"])
+                                                url["expanded_url"] = force_unicode(url["expanded_url"])
+                                                if not url["display_url"] in already_processed:
+                                                    already_processed.append(url["display_url"])
+                                                    # replace #hash_tag with link
+                                                    link = u"<a href=\"%s\" rel=\"external\" title=\"%s\">%s</a>" % (url["url"], url["expanded_url"], url["display_url"])
+                                                    text = text.replace(url["url"], link)
 
                         try:
                             # Save tweet to DB
@@ -161,18 +165,21 @@ class Command(BaseCommand):
                             tweet.save()
                             # clear cache for tweet feed
                             expire_cache_by_path('/data/twitter_feed_cache/tweets/', is_view=False)
-                        except:
+                        except Exception, err:
                             # catch all for errors that occur while saving the tweet
-                            self.emit_formatted_message(u"Unexpected error while saving the tweet: %s"
-                                % sys.exc_info()[0])
+                            self.emit_formatted_message(u"Unexpected error while saving the tweet: %s\n%s"
+                                % (sys.exc_info()[0], str(err),))
 
                     else:
-                        self.emit_formatted_message(u"Bypassing tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" %
-                                                    (streamtweet["user"]["screen_name"], stream.count, stream.rate))
-
-                except:
-                    # catch all for all errors
-                    self.emit_formatted_message(u"Unexpected error: %s" % "\n".join(sys.exc_info()))
+                        try:
+                            self.emit_formatted_message(u"Bypassing tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" %
+                                                    (force_unicode(streamtweet["user"]["screen_name"]), stream.count, stream.rate))
+                        except Exception, err:
+                            pass
+                except Exception, err:
+                    # catch for all errors
+                    self.emit_formatted_message(u"Unexpected error: %s\n%s" %
+                                                (sys.exc_info()[0], str(err),))
 
         self.stdout.write(u"Stream stopped\n\n")
 
