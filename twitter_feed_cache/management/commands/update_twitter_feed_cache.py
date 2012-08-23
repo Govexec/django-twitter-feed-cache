@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import daemon
 import signal
 import lockfile
@@ -16,6 +17,8 @@ TWITTER_PASSWORD = getattr(settings, 'TWITTER_PASSWORD', None)
 TWITTER_CACHE_WORKING_DIR = getattr(settings, 'TWITTER_CACHE_WORKING_DIR', '/tmp')
 TWITTER_CACHE_PID_FILE = os.path.realpath(getattr(settings, 'TWITTER_CACHE_PID_FILE', '/var/run/twitter_cache.pid'))
 TWITTER_CACHE_LOG_FILE = os.path.realpath(getattr(settings, 'TWITTER_CACHE_LOG_FILE', None))
+EPOCH_DATETIME = datetime.datetime(1970,1,1)
+SECONDS_PER_DAY = 24*60*60
 
 class Command(BaseCommand):
     pidfile_timeout = 10
@@ -95,7 +98,7 @@ class Command(BaseCommand):
                         self.emit_formatted_message(u"Saving tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (user_screen_name, stream.count, stream.rate))
 
                         # Parse data
-                        created_at = datetime.datetime.strptime(streamtweet["created_at"], '%a %b %d %H:%M:%S +0000 %Y')
+                        created_at = utc_to_local_datetime(datetime.datetime.strptime(streamtweet["created_at"], '%a %b %d %H:%M:%S +0000 %Y'))
 
                         # Add links to tweet
                         text = unicode(streamtweet["text"])
@@ -140,20 +143,20 @@ class Command(BaseCommand):
                             # Save tweet to DB
                             tweet = Tweet()
                             # Tweet data
-                            tweet.external_tweet_id = int(streamtweet["id"])
+                            tweet.external_tweet_id = streamtweet["id"]
                             tweet.text = text
                             tweet.created_at = created_at
                             # Posted by data
-                            tweet.posted_by_user_id = int(streamtweet["user"]["id"])
+                            tweet.posted_by_user_id = streamtweet["user"]["id"]
                             tweet.posted_by_name = user_name
                             tweet.posted_by_screen_name = user_screen_name
                             # In reply to data
                             tweet.in_reply_to_user_id = None if not streamtweet["in_reply_to_user_id"] else \
-                                int(streamtweet["in_reply_to_user_id"])
+                                streamtweet["in_reply_to_user_id"]
                             tweet.in_reply_to_screen_name = None if not streamtweet["in_reply_to_screen_name"] else \
                                 force_unicode(streamtweet["in_reply_to_screen_name"])
                             tweet.in_reply_to_status_id = None if not streamtweet["in_reply_to_status_id"] else \
-                                int(streamtweet["in_reply_to_status_id"])
+                                streamtweet["in_reply_to_status_id"]
                             # save tweet
                             tweet.save()
                             # clear cache for tweet feed
@@ -169,7 +172,7 @@ class Command(BaseCommand):
 
                 except:
                     # catch all for all errors
-                    self.emit_formatted_message(u"Unexpected error: %s" % sys.exc_info()[0])
+                    self.emit_formatted_message(u"Unexpected error: %s" % "\n".join(sys.exc_info()))
 
         self.stdout.write(u"Stream stopped\n\n")
 
@@ -255,3 +258,10 @@ class Command(BaseCommand):
             logfile.write(u"%s\tDaemon stopped\n" % datetime.datetime.now())
             logfile.close()
             self.stdout.write(u"Daemon stopped.\n")
+
+def utc_to_local_datetime(utc_datetime):
+    delta = utc_datetime - EPOCH_DATETIME
+    utc_epoch = SECONDS_PER_DAY * delta.days + delta.seconds
+    time_struct = time.localtime(utc_epoch)
+    dt_args = time_struct[:6] + (delta.microseconds,)
+    return datetime.datetime(*dt_args)
