@@ -6,10 +6,10 @@ import lockfile
 import datetime
 from optparse import make_option
 from django.conf import settings
+from django.utils.encoding import force_unicode
+from content_utils.utils import expire_cache_by_path
 from django.core.management.base import BaseCommand, CommandError
 from daemon.runner import make_pidlockfile, is_pidfile_stale, emit_message
-from content_utils.utils import expire_cache_by_path
-from django.utils.encoding import force_unicode
 
 TWITTER_USERNAME = getattr(settings, 'TWITTER_USERNAME', None)
 TWITTER_PASSWORD = getattr(settings, 'TWITTER_PASSWORD', None)
@@ -20,7 +20,7 @@ TWITTER_CACHE_LOG_FILE = os.path.realpath(getattr(settings, 'TWITTER_CACHE_LOG_F
 class Command(BaseCommand):
     pidfile_timeout = 10
     start_message = u"Started with pid %(pid)d"
-    help = "Update local twitter feed cache based via Twitter API"
+    help = u"Update local twitter feed cache based via Twitter API"
     option_list = BaseCommand.option_list + (
         make_option('--start',
             action='store_true',
@@ -38,10 +38,10 @@ class Command(BaseCommand):
         error_messages = []
 
         if TWITTER_PASSWORD is None:
-            error_messages.append('settings.TWITTER_PASSWORD must be set.')
+            error_messages.append(u'settings.TWITTER_PASSWORD must be set.')
 
         if TWITTER_USERNAME is None:
-            error_messages.append('settings.TWITTER_USERNAME must be set.')
+            error_messages.append(u'settings.TWITTER_USERNAME must be set.')
 
         if len(error_messages) > 0:
             raise CommandError("\n".join(error_messages))
@@ -75,94 +75,103 @@ class Command(BaseCommand):
         '''
         with tweetstream.FilterStream(TWITTER_USERNAME, TWITTER_PASSWORD, follow=users) as stream:
             for streamtweet in stream:
-                if "delete" in streamtweet:
-                    if streamtweet["delete"]["status"]["user_id"] in users:
-                        self.emit_formatted_message("Deleting tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["delete"]["status"]["user_id"], stream.count, stream.rate))
+                try:
+                    if "delete" in streamtweet:
+                        if streamtweet["delete"]["status"]["user_id"] in users:
+                            self.emit_formatted_message(u"Deleting tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["delete"]["status"]["user_id"], stream.count, stream.rate))
+
+                            try:
+                                tweet = Tweet.objects.get(external_tweet_id=streamtweet["delete"]["status"]["id"])
+                                tweet.delete()
+
+                                expire_cache_by_path('/data/twitter_feed_cache/tweets/', is_view=False)
+                            except:
+                                print "Failed to delete"
+                        else:
+                            self.emit_formatted_message("Bypassing delete tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["delete"]["status"]["user_id"], stream.count, stream.rate))
+                    elif streamtweet["user"]["id"] in users:
+                        user_screen_name = force_unicode(streamtweet["user"]["screen_name"])
+                        user_name = force_unicode(streamtweet["user"]["name"])
+                        self.emit_formatted_message(u"Saving tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (user_screen_name, stream.count, stream.rate))
+
+                        # Parse data
+                        created_at = datetime.datetime.strptime(streamtweet["created_at"], '%a %b %d %H:%M:%S +0000 %Y')
+
+                        # Add links to tweet
+                        text = unicode(streamtweet["text"])
+                        if "entities" in streamtweet:
+                            if "user_mentions" in streamtweet["entities"]:
+                                # reset already_processed
+                                already_processed = []
+                                for mention in streamtweet["entities"]["user_mentions"]:
+                                    mention["screen_name"] = force_unicode(mention["screen_name"])
+                                    if not mention["screen_name"] in already_processed:
+                                        already_processed.append(mention["screen_name"])
+                                        # replace @screen_name with link
+                                        link = u"<a href=\"http://www.twitter.com/%s\" rel=\"external\">@%s</a>" % (mention["screen_name"], mention["screen_name"])
+                                        text = text.replace(u"@%s" % mention["screen_name"], link)
+
+                            if "hashtags" in streamtweet["entities"]:
+                                # reset already_processed
+                                already_processed = []
+                                for hashtag in streamtweet["entities"]["hashtags"]:
+                                    hashtag["text"] = force_unicode(hashtag["text"])
+                                    if not hashtag["text"] in already_processed:
+                                        already_processed.append(hashtag["text"])
+                                        # replace #hash_tag with link
+                                        link = u"<a href=\"https://twitter.com/search/?src=hash&q=%%23%s\" rel=\"external\">#%s</a>" % (hashtag["text"], hashtag["text"])
+                                        text = text.replace(u"#%s" % hashtag["text"], link)
+
+                            if "urls" in streamtweet["entities"]:
+                                # reset already_processed
+                                already_processed = []
+                                for url in streamtweet["entities"]["urls"]:
+                                    if hasattr(url, "display_url"):
+                                        url["display_url"] = force_unicode(url["display_url"])
+                                        url["url"] = force_unicode(url["url"])
+                                        url["expanded_url"] = force_unicode(url["expanded_url"])
+                                        if not url["display_url"] in already_processed:
+                                            already_processed.append(url["display_url"])
+                                            # replace #hash_tag with link
+                                            link = u"<a href=\"%s\" rel=\"external\" title=\"%s\">%s</a>" % (url["url"], url["expanded_url"], url["display_url"])
+                                            text = text.replace(url["url"], link)
 
                         try:
-                            tweet = Tweet.objects.get(external_tweet_id=streamtweet["delete"]["status"]["id"])
-                            tweet.delete()
-
+                            # Save tweet to DB
+                            tweet = Tweet()
+                            # Tweet data
+                            tweet.external_tweet_id = int(streamtweet["id"])
+                            tweet.text = text
+                            tweet.created_at = created_at
+                            # Posted by data
+                            tweet.posted_by_user_id = int(streamtweet["user"]["id"])
+                            tweet.posted_by_name = user_name
+                            tweet.posted_by_screen_name = user_screen_name
+                            # In reply to data
+                            tweet.in_reply_to_user_id = None if not streamtweet["in_reply_to_user_id"] else \
+                                int(streamtweet["in_reply_to_user_id"])
+                            tweet.in_reply_to_screen_name = None if not streamtweet["in_reply_to_screen_name"] else \
+                                force_unicode(streamtweet["in_reply_to_screen_name"])
+                            tweet.in_reply_to_status_id = None if not streamtweet["in_reply_to_status_id"] else \
+                                int(streamtweet["in_reply_to_status_id"])
+                            # save tweet
+                            tweet.save()
+                            # clear cache for tweet feed
                             expire_cache_by_path('/data/twitter_feed_cache/tweets/', is_view=False)
                         except:
-                            print "Failed to delete"
+                            # catch all for errors that occur while saving the tweet
+                            self.emit_formatted_message(u"Unexpected error while saving the tweet: %s"
+                                % sys.exc_info()[0])
+
                     else:
-                        self.emit_formatted_message("Bypassing delete tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["delete"]["status"]["user_id"], stream.count, stream.rate))
-                elif streamtweet["user"]["id"] in users:
-                    self.emit_formatted_message("Saving tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet["user"]["screen_name"], stream.count, stream.rate))
-                    #print "Text: %s" % str(tweet["text"])
+                        self.emit_formatted_message(u"Bypassing tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" %
+                                                    (streamtweet["user"]["screen_name"], stream.count, stream.rate))
 
-                    # Parse data
-                    created_at = datetime.datetime.strptime(streamtweet["created_at"], '%a %b %d %H:%M:%S +0000 %Y')
+                except:
+                    # catch all for all errors
+                    self.emit_formatted_message(u"Unexpected error: %s" % sys.exc_info()[0])
 
-                    # Add links to tweet
-                    text = streamtweet["text"]
-                    if "entities" in streamtweet:
-                        if "user_mentions" in streamtweet["entities"]:
-                            # reset already_processed
-                            already_processed = []
-                            for mention in streamtweet["entities"]["user_mentions"]:
-                                if not mention["screen_name"] in already_processed:
-                                    already_processed.append(mention["screen_name"])
-
-                                    # replace @screen_name with link
-                                    link = "<a href=\"http://www.twitter.com/%s\" rel=\"external\">@%s</a>" % (mention["screen_name"], mention["screen_name"])
-                                    text = text.replace("@%s" % mention["screen_name"], link)
-
-                        if "hashtags" in streamtweet["entities"]:
-                            # reset already_processed
-                            already_processed = []
-                            for hashtag in streamtweet["entities"]["hashtags"]:
-                                if not hashtag["text"] in already_processed:
-                                    already_processed.append(hashtag["text"])
-
-                                    # replace #hash_tag with link
-                                    link = "<a href=\"https://twitter.com/search/?src=hash&q=%%23%s\" rel=\"external\">#%s</a>" % (hashtag["text"], hashtag["text"])
-                                    text = text.replace("#%s" % hashtag["text"], link)
-
-                        if "urls" in streamtweet["entities"]:
-                            # reset already_processed
-                            already_processed = []
-                            for url in streamtweet["entities"]["urls"]:
-                                if hasattr(url, "display_url"):
-                                    if not url["display_url"] in already_processed:
-                                        already_processed.append(url["display_url"])
-
-                                        # replace #hash_tag with link
-                                        link = "<a href=\"%s\" rel=\"external\" title=\"%s\">%s</a>" % (url["url"], url["expanded_url"], url["display_url"])
-                                        text = text.replace(url["url"], link)
-
-                    try:
-                        # Save tweet to DB
-                        tweet = Tweet()
-                        # Tweet data
-                        tweet.external_tweet_id = None if not streamtweet["id"] else int(streamtweet["id"])
-                        tweet.text = force_unicode(text)
-                        tweet.created_at = created_at
-                        # Posted by data
-                        tweet.posted_by_user_id = None if not streamtweet["user"]["id"] else \
-                            int(streamtweet["user"]["id"])
-                        tweet.posted_by_name = force_unicode(streamtweet["user"]["name"])
-                        tweet.posted_by_screen_name = force_unicode(streamtweet["user"]["screen_name"])
-                        # In reply to data
-                        tweet.in_reply_to_user_id = None if not streamtweet["in_reply_to_user_id"] else \
-                            int(streamtweet["in_reply_to_user_id"])
-                        tweet.in_reply_to_screen_name = force_unicode(streamtweet["in_reply_to_screen_name"])
-                        tweet.in_reply_to_status_id = None if not streamtweet["in_reply_to_status_id"] else \
-                            int(streamtweet["in_reply_to_status_id"])
-                        # save tweet
-                        tweet.save()
-                        # clear cache for tweet feed
-                        expire_cache_by_path('/data/twitter_feed_cache/tweets/', is_view=False)
-                    except:
-                        # catch all for errors that occur while saving the tweet
-                        self.emit_formatted_message("Unexpected error: %s" % sys.exc_info()[0])
-
-                else:
-                    self.emit_formatted_message("Bypassing tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" %
-                                                (streamtweet["user"]["screen_name"], stream.count, stream.rate))
-
-        self.stdout.write("Stream stopped\n\n")
+        self.stdout.write(u"Stream stopped\n\n")
 
     """  Make a PIDLockFile instance """
     def init_pidfile(self):
@@ -171,14 +180,14 @@ class Command(BaseCommand):
     """ Prepend date to a message then output the message to a stream and flush the stream """
     def emit_formatted_message(self, message, stream=sys.stdout):
         if message:
-            formatted_message = "%s\t%s" % (datetime.datetime.now(), message.strip(),)
+            formatted_message = u"%s\t%s" % (datetime.datetime.now(), message.strip(),)
             emit_message(message=formatted_message, stream=stream)
 
     """ Open the daemon context and run the application. """
     def start_daemon(self):
         # root user check
         if os.geteuid() == 0:
-            raise CommandError("Can not run daemon as root!\n")
+            raise CommandError(u"Can not run daemon as root!\n")
         # PID file setuo
         self.init_pidfile()
         # remove pid file if PID is not active
@@ -200,7 +209,7 @@ class Command(BaseCommand):
             self.daemon_context.stdout = open(TWITTER_CACHE_LOG_FILE, 'a+')
             self.daemon_context.stderr = open(TWITTER_CACHE_LOG_FILE, 'a+', buffering=0)
 
-        self.stdout.write("Starting daemon...\n")
+        self.stdout.write(u"Starting daemon...\n")
 
         try:
             # become a daemon
@@ -232,7 +241,7 @@ class Command(BaseCommand):
         # is the PID in the pid file active
         if is_pidfile_stale(self.pidfile):
             self.pidfile.break_lock()
-            self.stdout.write("Daemon is not running.\n")
+            self.stdout.write(u"Daemon is not running.\n")
         else:
             # get the PID from PID file
             pid = self.pidfile.read_pid()
@@ -243,6 +252,6 @@ class Command(BaseCommand):
                 raise CommandError(u"Failed to terminate %(pid)d: %(exc)s" % vars())
 
             logfile = open(TWITTER_CACHE_LOG_FILE, 'a+', buffering=0)
-            logfile.write("%s\tDaemon stopped\n" % datetime.datetime.now())
+            logfile.write(u"%s\tDaemon stopped\n" % datetime.datetime.now())
             logfile.close()
-            self.stdout.write("Daemon stopped.\n")
+            self.stdout.write(u"Daemon stopped.\n")
