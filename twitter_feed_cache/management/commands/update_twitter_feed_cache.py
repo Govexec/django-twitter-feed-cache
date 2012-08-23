@@ -9,6 +9,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from daemon.runner import make_pidlockfile, is_pidfile_stale, emit_message
 from content_utils.utils import expire_cache_by_path
+from django.utils.encoding import force_unicode
 
 TWITTER_USERNAME = getattr(settings, 'TWITTER_USERNAME', None)
 TWITTER_PASSWORD = getattr(settings, 'TWITTER_PASSWORD', None)
@@ -131,27 +132,31 @@ class Command(BaseCommand):
                                         link = "<a href=\"%s\" rel=\"external\" title=\"%s\">%s</a>" % (url["url"], url["expanded_url"], url["display_url"])
                                         text = text.replace(url["url"], link)
 
-                    # Save tweet to DB
-                    tweet = Tweet()
-
-                    # Tweet data
-                    tweet.external_tweet_id = streamtweet["id"]
-                    tweet.text = text
-                    tweet.created_at = created_at
-
-                    # Posted by data
-                    tweet.posted_by_user_id = streamtweet["user"]["id"]
-                    tweet.posted_by_name = streamtweet["user"]["name"]
-                    tweet.posted_by_screen_name = streamtweet["user"]["screen_name"]
-
-                    # In reply to data
-                    tweet.in_reply_to_user_id = streamtweet["in_reply_to_user_id"]
-                    tweet.in_reply_to_screen_name = streamtweet["in_reply_to_screen_name"]
-                    tweet.in_reply_to_status_id = streamtweet["in_reply_to_status_id"]
-
-                    tweet.save()
-
-                    expire_cache_by_path('/data/twitter_feed_cache/tweets/', is_view=False)
+                    try:
+                        # Save tweet to DB
+                        tweet = Tweet()
+                        # Tweet data
+                        tweet.external_tweet_id = None if not streamtweet["id"] else int(streamtweet["id"])
+                        tweet.text = force_unicode(text)
+                        tweet.created_at = created_at
+                        # Posted by data
+                        tweet.posted_by_user_id = None if not streamtweet["user"]["id"] else \
+                            int(streamtweet["user"]["id"])
+                        tweet.posted_by_name = force_unicode(streamtweet["user"]["name"])
+                        tweet.posted_by_screen_name = force_unicode(streamtweet["user"]["screen_name"])
+                        # In reply to data
+                        tweet.in_reply_to_user_id = None if not streamtweet["in_reply_to_user_id"] else \
+                            int(streamtweet["in_reply_to_user_id"])
+                        tweet.in_reply_to_screen_name = force_unicode(streamtweet["in_reply_to_screen_name"])
+                        tweet.in_reply_to_status_id = None if not streamtweet["in_reply_to_status_id"] else \
+                            int(streamtweet["in_reply_to_status_id"])
+                        # save tweet
+                        tweet.save()
+                        # clear cache for tweet feed
+                        expire_cache_by_path('/data/twitter_feed_cache/tweets/', is_view=False)
+                    except:
+                        # catch all for errors that occur while saving the tweet
+                        self.emit_formatted_message("Unexpected error: %s" % sys.exc_info()[0])
 
                 else:
                     self.emit_formatted_message("Bypassing tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" %
