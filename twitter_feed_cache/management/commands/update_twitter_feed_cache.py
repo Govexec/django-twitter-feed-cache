@@ -7,6 +7,7 @@ import lockfile
 import datetime
 from optparse import make_option
 from django.conf import settings
+from django.utils.safestring import mark_safe
 from django.utils.encoding import force_unicode
 from content_utils.utils import expire_cache_by_path
 from django.core.management.base import BaseCommand, CommandError
@@ -102,7 +103,7 @@ class Command(BaseCommand):
                         created_at = utc_to_local_datetime(datetime.datetime.strptime(streamtweet["created_at"], '%a %b %d %H:%M:%S +0000 %Y'))
 
                         # Add links to tweet
-                        text = unicode(streamtweet["text"])
+                        text = mark_safe(streamtweet["text"]).encode('ascii','xmlcharrefreplace')
                         if "entities" in streamtweet:
                             if streamtweet["entities"]:
                                 if "user_mentions" in streamtweet["entities"]:
