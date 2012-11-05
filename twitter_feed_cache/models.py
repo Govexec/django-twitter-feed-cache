@@ -18,6 +18,6 @@ class Tweet(models.Model):
     posted_by_name = models.CharField(max_length=200)
 
     # in reply to
-    in_reply_to_screen_name = models.CharField(max_length=30, null=True)
-    in_reply_to_user_id = models.BigIntegerField(null=True)
-    in_reply_to_status_id = models.BigIntegerField(null=True)
+    in_reply_to_screen_name = models.CharField(max_length=30, null=True, blank=True)
+    in_reply_to_user_id = models.BigIntegerField(null=True, blank=True)
+    in_reply_to_status_id = models.BigIntegerField(null=True, blank=True)
