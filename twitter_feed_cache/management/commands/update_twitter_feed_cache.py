@@ -161,10 +161,15 @@ class Command(BaseCommand):
                                             # replace #hash_tag with link
                                             link = u"<a href=\"%s\" rel=\"external\" title=\"%s\">%s</a>" % (url["url"], url["expanded_url"], url["display_url"])
                                             text = text.replace(url["url"], link)
-    
-                    
+
+                    # If tweet exists, don't save twice
+                    try:
+                        tweet = Tweet.objects.get(external_tweet_id=int(streamtweet.id))
+                    except:
+                        tweet = Tweet()
+
                     # Save tweet to DB
-                    tweet = Tweet()
+
                     # Tweet data
                     tweet.external_tweet_id = streamtweet.id
                     tweet.text = text
