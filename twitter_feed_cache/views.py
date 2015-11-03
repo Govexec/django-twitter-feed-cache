@@ -3,11 +3,11 @@ from django.http import HttpResponse
 from django.views.decorators.cache import cache_control
 
 from content_utils.utils import format_date_short
-from cachecow.pagecache import cache_page
+from cachew.decorators import cache_page_function as cache_page
 
 from models import Tweet
 
-@cache_page
+@cache_page(1800)
 @cache_control(max_age=1800)
 def twitter_feed(request):
     tweets = Tweet.objects.all().order_by("-created_at")[0:10]
