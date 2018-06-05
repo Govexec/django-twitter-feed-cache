@@ -4,14 +4,16 @@ import daemon
 import signal
 import lockfile
 import datetime
+from daemon.runner import make_pidlockfile, is_pidfile_stale
 from optparse import make_option
+
 from django.conf import settings
 from django.utils.safestring import mark_safe
 from django.utils.encoding import force_unicode
-from content_utils.utils import expire_cache_by_path
 from django.core.management.base import BaseCommand, CommandError
-from daemon.runner import make_pidlockfile, is_pidfile_stale
 import tweepy
+
+from content_utils.utils import expire_cache_by_path
 from twitter_feed_cache.models import Tweet, FollowAccount
 
 
@@ -24,9 +26,8 @@ TWITTER_CACHE_WORKING_DIR = getattr(settings, 'TWITTER_CACHE_WORKING_DIR', '/tmp
 TWITTER_CACHE_PID_FILE = os.path.realpath(getattr(settings, 'TWITTER_CACHE_PID_FILE', '/var/run/twitter_cache.pid'))
 TWITTER_CACHE_LOG_FILE = os.path.realpath(getattr(settings, 'TWITTER_CACHE_LOG_FILE', None))
 EPOCH_DATETIME = datetime.datetime(1970, 1, 1)
-SECONDS_PER_DAY = 24*60*60
+SECONDS_PER_DAY = 24 * 60 * 60
 
-from raven import Client
 
 class Command(BaseCommand):
     pidfile_timeout = 10
@@ -53,7 +54,7 @@ class Command(BaseCommand):
 
         if TWITTER_CONSUMER_SECRET is None:
             error_messages.append(u'settings.TWITTER_CONSUMER_SECRET must be set.')
-            
+
         if TWITTER_ACCESS_TOKEN is None:
             error_messages.append(u'settings.TWITTER_ACCESS_TOKEN must be set.')
 
@@ -70,14 +71,8 @@ class Command(BaseCommand):
         else:
             self.cache_tweets()
 
-    
-
     def cache_tweets(self):
-
-        client = Client(dsn=settings.RAVEN_CONFIG['dsn'])
-
         users = FollowAccount.objects.filter(active=True)
-
 
         '''
         A note on parameters:
@@ -93,35 +88,35 @@ class Command(BaseCommand):
         auth = tweepy.auth.OAuthHandler(TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET)
         auth.set_access_token(TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET)
         api = tweepy.API(auth)
-        
+
         for user in users:
             for streamtweet in api.user_timeline(user.screen_name):
                 #import pdb;pdb.set_trace()
                 if hasattr(streamtweet, "delete"):
                     if hasattr(streamtweet.delete, "status") and "user_id" in streamtweet["delete"]["status"]:
                         if streamtweet.delete.status.user_id in users:
-                            
-                            #client.captureMessage(u"Deleting tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet.delete.status.user_id, stream.count, stream.rate))
+
+                            # client.captureMessage(u"Deleting tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet.delete.status.user_id, stream.count, stream.rate))
                             try:
                                 tweet = Tweet.objects.get(external_tweet_id=int(streamtweet.delete.status.id))
                                 tweet.delete()
                                 expire_cache_by_path('/data/twitter_feed_cache/tweets/', is_view=False)
                             except Exception, err:
                                 pass
-                                #client.captureMessage(u"Failed to delete tweet: %s\n%s"
+                                # client.captureMessage(u"Failed to delete tweet: %s\n%s"
                                 #    % (sys.exc_info()[0], str(err),))
                         else:
                             pass
-                            #client.captureMessage("Bypassing delete tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet.delete.status.user_id, stream.count, stream.rate))
-                                
+                            # client.captureMessage("Bypassing delete tweet from %-16s\t( tweet %d, rate %.1f tweets/sec)" % (streamtweet.delete.status.user_id, stream.count, stream.rate))
+
                 else:
                     user_screen_name = force_unicode(streamtweet.user.screen_name)
                     user_name = force_unicode(streamtweet.user.name)
-                    #client.captureMessage(u"Saving tweet from %-16s" % (user_screen_name, ))
-    
+                    # client.captureMessage(u"Saving tweet from %-16s" % (user_screen_name, ))
+
                     # Parse data
                     created_at = utc_to_local_datetime(streamtweet.created_at)
-    
+
                     # Add links to tweet
                     text = mark_safe(streamtweet.text).encode('ascii','xmlcharrefreplace')
                     if hasattr(streamtweet, "entities") and streamtweet.entities:
@@ -135,7 +130,7 @@ class Command(BaseCommand):
                                     # replace @screen_name with link
                                     link = u"<a href=\"http://www.twitter.com/%s\" rel=\"external\">@%s</a>" % (mention["screen_name"], mention["screen_name"])
                                     text = text.replace(u"@%s" % mention["screen_name"], link)
-    
+
                         if hasattr(streamtweet.entities, "hashtags") and streamtweet.entities.hashtags:
                             # reset already_processed
                             already_processed = []
@@ -146,7 +141,7 @@ class Command(BaseCommand):
                                     # replace #hash_tag with link
                                     link = u"<a href=\"https://twitter.com/search/?src=hash&q=%%23%s\" rel=\"external\">#%s</a>" % (hashtag.text, hashtag.text)
                                     text = text.replace(u"#%s" % hashtag.text, link)
-    
+
                         if "urls" in streamtweet.entities:
                             # reset already_processed
                             already_processed = []
